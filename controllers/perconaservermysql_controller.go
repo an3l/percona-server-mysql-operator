@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -693,6 +694,10 @@ func (r *PerconaServerMySQLReconciler) reconcileServices(ctx context.Context, cr
 func (r *PerconaServerMySQLReconciler) reconcileReplication(ctx context.Context, cr *apiv1alpha1.PerconaServerMySQL) error {
 	l := log.FromContext(ctx).WithName("reconcileReplication")
 
+	if err := r.reconcileGroupReplication(ctx, cr); err != nil {
+		return errors.Wrap(err, "reconcile group replication")
+	}
+
 	sts := &appsv1.StatefulSet{}
 	if err := r.Get(ctx, client.ObjectKeyFromObject(orchestrator.StatefulSet(cr)), sts); err != nil {
 		return client.IgnoreNotFound(err)
@@ -708,6 +713,103 @@ func (r *PerconaServerMySQLReconciler) reconcileReplication(ctx context.Context,
 	}
 	if err := reconcileReplicationSemiSync(ctx, r.Client, cr); err != nil {
 		return errors.Wrap(err, "reconcile semi-sync")
+	}
+
+	return nil
+}
+
+func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Context, cr *apiv1alpha1.PerconaServerMySQL) error {
+	l := log.FromContext(ctx).WithName("reconcileGroupReplication")
+
+	if cr.Spec.MySQL.ClusterType != apiv1alpha1.ClusterTypeGR {
+		return nil
+	}
+
+	operatorPass, err := k8s.UserPassword(ctx, r.Client, cr, apiv1alpha1.UserOperator)
+	if err != nil {
+		return errors.Wrap(err, "get operator password")
+	}
+
+	replicationPass, err := k8s.UserPassword(ctx, r.Client, cr, apiv1alpha1.UserReplication)
+	if err != nil {
+		return errors.Wrap(err, "get replication password")
+	}
+
+	firstPod := &corev1.Pod{}
+	err = r.Client.Get(ctx, types.NamespacedName{Namespace: cr.Namespace, Name: mysql.Name(cr) + "-0"}, firstPod)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+
+		return errors.Wrap(err, "get first MySQL pod")
+	}
+
+	if !k8s.IsPodReady(*firstPod) {
+		l.Info("waiting first pod to be ready")
+	}
+
+	db, err := replicator.NewReplicator(apiv1alpha1.UserOperator, operatorPass, firstPod.Name, mysql.DefaultAdminPort)
+	if err != nil {
+		return errors.Wrapf(err, "connect to %s", firstPod.Name)
+	}
+	defer db.Close()
+
+	state, err := db.GetMemberState(mysql.PodName(cr, 0) + "." + mysql.ServiceName(cr) + "." + cr.Namespace)
+	if state == replicator.MemberStateOffline {
+		if err := db.SetGlobal("group_replication_bootstrap_group", "ON"); err != nil {
+			return err
+		}
+
+		seeds := fmt.Sprintf("%s:%d", mysql.FQDN(cr, 0), mysql.DefaultGRPort)
+		if err := db.SetGlobal("group_replication_group_seeds", seeds); err != nil {
+			return err
+		}
+
+		if err := db.StartGroupReplication(replicationPass); err != nil {
+			return err
+		}
+
+		if err := db.SetGlobal("group_replication_bootstrap_group", "OFF"); err != nil {
+			return err
+		}
+	}
+
+	pods, err := k8s.PodsByLabels(ctx, r.Client, mysql.MatchLabels(cr))
+	if err != nil {
+		return errors.Wrap(err, "get MySQL pods")
+	}
+
+	for i, pod := range pods {
+		if i == 0 || !k8s.IsPodReady(pod) {
+			l.Info("skipping pod since it's not ready", "pod", pod.Name)
+			continue
+		}
+
+		db, err := replicator.NewReplicator(apiv1alpha1.UserOperator, operatorPass, pod.Name, mysql.DefaultAdminPort)
+		if err != nil {
+			return errors.Wrapf(err, "connect to %s", pod.Name)
+		}
+		defer db.Close()
+
+		state, err := db.GetMemberState(mysql.PodName(cr, i) + "." + mysql.ServiceName(cr) + "." + cr.Namespace)
+		if state != replicator.MemberStateOffline {
+			l.Info("Member state", "pod", pod.Name, "state", state)
+			continue
+		}
+
+		seeds := make([]string, i)
+		for j := 0; j <= i; j++ {
+			seeds[j] = fmt.Sprintf("%s:%d", mysql.FQDN(cr, j), mysql.DefaultGRPort)
+		}
+
+		if err := db.SetGlobal("group_replication_group_seeds", strings.Join(seeds, ",")); err != nil {
+			return err
+		}
+
+		if err := db.StartGroupReplication(replicationPass); err != nil {
+			return err
+		}
 	}
 
 	return nil

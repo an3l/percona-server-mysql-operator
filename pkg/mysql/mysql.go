@@ -1,6 +1,8 @@
 package mysql
 
 import (
+	"fmt"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,6 +28,7 @@ const (
 
 const (
 	DefaultPort      = 3306
+	DefaultGRPort    = 33061
 	DefaultAdminPort = 33062
 )
 
@@ -82,6 +85,15 @@ func UnreadyServiceName(cr *apiv1alpha1.PerconaServerMySQL) string {
 
 func ConfigMapName(cr *apiv1alpha1.PerconaServerMySQL) string {
 	return Name(cr)
+}
+
+func PodName(cr *apiv1alpha1.PerconaServerMySQL, idx int) string {
+	return fmt.Sprintf("%s-%d", Name(cr), idx)
+}
+
+func FQDN(cr *apiv1alpha1.PerconaServerMySQL, idx int) string {
+	// TODO: DNS suffix
+	return fmt.Sprintf("%s.%s.svc.cluster.local", PodName(cr, idx), cr.Namespace)
 }
 
 func MatchLabels(cr *apiv1alpha1.PerconaServerMySQL) map[string]string {
@@ -255,8 +267,12 @@ func UnreadyService(cr *apiv1alpha1.PerconaServerMySQL) *corev1.Service {
 			ClusterIP: "None",
 			Ports: []corev1.ServicePort{
 				{
-					Name: "mysql",
+					Name: componentName,
 					Port: DefaultPort,
+				},
+				{
+					Name: componentName + "-gr",
+					Port: DefaultGRPort,
 				},
 			},
 			Selector:                 labels,
@@ -282,8 +298,12 @@ func HeadlessService(cr *apiv1alpha1.PerconaServerMySQL) *corev1.Service {
 			ClusterIP: "None",
 			Ports: []corev1.ServicePort{
 				{
-					Name: "mysql",
+					Name: componentName,
 					Port: DefaultPort,
+				},
+				{
+					Name: componentName + "-gr",
+					Port: DefaultGRPort,
 				},
 			},
 			Selector: labels,
@@ -316,6 +336,10 @@ func PodService(cr *apiv1alpha1.PerconaServerMySQL, t corev1.ServiceType, podNam
 					Name: componentName,
 					Port: DefaultPort,
 				},
+				{
+					Name: componentName + "-gr",
+					Port: DefaultGRPort,
+				},
 			},
 		},
 	}
@@ -345,8 +369,12 @@ func PrimaryService(cr *apiv1alpha1.PerconaServerMySQL) *corev1.Service {
 			Type: serviceType,
 			Ports: []corev1.ServicePort{
 				{
-					Name: "mysql",
+					Name: componentName,
 					Port: DefaultPort,
+				},
+				{
+					Name: componentName + "-gr",
+					Port: DefaultGRPort,
 				},
 			},
 			Selector: selector,
@@ -367,7 +395,7 @@ func containers(cr *apiv1alpha1.PerconaServerMySQL) []corev1.Container {
 func mysqldContainer(cr *apiv1alpha1.PerconaServerMySQL) corev1.Container {
 	spec := cr.MySQLSpec()
 
-	return corev1.Container{
+	container := corev1.Container{
 		Name:            componentName,
 		Image:           spec.Image,
 		ImagePullPolicy: spec.ImagePullPolicy,
@@ -392,8 +420,12 @@ func mysqldContainer(cr *apiv1alpha1.PerconaServerMySQL) corev1.Container {
 		},
 		Ports: []corev1.ContainerPort{
 			{
-				Name:          "mysql",
+				Name:          componentName,
 				ContainerPort: DefaultPort,
+			},
+			{
+				Name:          componentName + "-gr",
+				ContainerPort: DefaultGRPort,
 			},
 		},
 		VolumeMounts: []corev1.VolumeMount{
@@ -419,19 +451,6 @@ func mysqldContainer(cr *apiv1alpha1.PerconaServerMySQL) corev1.Container {
 		TerminationMessagePath:   "/dev/termination-log",
 		TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 		SecurityContext:          spec.ContainerSecurityContext,
-		StartupProbe: &corev1.Probe{
-			Handler: corev1.Handler{
-				Exec: &corev1.ExecAction{
-					Command: []string{"/var/lib/mysql/bootstrap"},
-				},
-			},
-			InitialDelaySeconds:           spec.StartupProbe.InitialDelaySeconds,
-			TimeoutSeconds:                spec.StartupProbe.TimeoutSeconds,
-			PeriodSeconds:                 spec.StartupProbe.PeriodSeconds,
-			FailureThreshold:              spec.StartupProbe.FailureThreshold,
-			SuccessThreshold:              spec.StartupProbe.SuccessThreshold,
-			TerminationGracePeriodSeconds: spec.StartupProbe.TerminationGracePeriodSeconds,
-		},
 		LivenessProbe: &corev1.Probe{
 			Handler: corev1.Handler{
 				Exec: &corev1.ExecAction{
@@ -459,6 +478,24 @@ func mysqldContainer(cr *apiv1alpha1.PerconaServerMySQL) corev1.Container {
 			TerminationGracePeriodSeconds: spec.ReadinessProbe.TerminationGracePeriodSeconds,
 		},
 	}
+
+	if cr.Spec.MySQL.ClusterType != apiv1alpha1.ClusterTypeGR {
+		container.StartupProbe = &corev1.Probe{
+			Handler: corev1.Handler{
+				Exec: &corev1.ExecAction{
+					Command: []string{"/var/lib/mysql/bootstrap"},
+				},
+			},
+			InitialDelaySeconds:           spec.StartupProbe.InitialDelaySeconds,
+			TimeoutSeconds:                spec.StartupProbe.TimeoutSeconds,
+			PeriodSeconds:                 spec.StartupProbe.PeriodSeconds,
+			FailureThreshold:              spec.StartupProbe.FailureThreshold,
+			SuccessThreshold:              spec.StartupProbe.SuccessThreshold,
+			TerminationGracePeriodSeconds: spec.StartupProbe.TerminationGracePeriodSeconds,
+		}
+	}
+
+	return container
 }
 
 func pmmContainer(clusterName, secretsName string, pmmSpec *apiv1alpha1.PMMSpec) corev1.Container {

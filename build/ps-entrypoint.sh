@@ -152,7 +152,7 @@ create_default_cnf() {
 	sed -i "/\[mysqld\]/a report_host=${FQDN}" $CFG
 	sed -i "/\[mysqld\]/a report_port=3306" $CFG
 	sed -i "/\[mysqld\]/a gtid-mode=ON" $CFG
-	sed -i "/\[mysqld\]/a enforce-gtid-consistency" $CFG
+	sed -i "/\[mysqld\]/a enforce-gtid-consistency=ON" $CFG
 	sed -i "/\[mysqld\]/a plugin-load-add=clone=mysql_clone.so" $CFG
 	sed -i "/\[mysqld\]/a plugin-load-add=rpl_semi_sync_master=semisync_master.so" $CFG
 	sed -i "/\[mysqld\]/a plugin-load-add=rpl_semi_sync_slave=semisync_slave.so" $CFG
@@ -172,6 +172,25 @@ create_default_cnf() {
 			) >>$CFG
 		fi
 	done
+}
+
+add_group_replication_variables() {
+	FQDN="${HOSTNAME}.${SERVICE_NAME}.$(</var/run/secrets/kubernetes.io/serviceaccount/namespace)"
+
+	sed -i "/\[mysqld\]/a plugin_load_add=group_replication.so" $CFG
+	sed -i "/\[mysqld\]/a log_slave_updates=ON" $CFG
+	sed -i "/\[mysqld\]/a binlog_format=ROW" $CFG
+	sed -i "/\[mysqld\]/a master_info_repository=TABLE" $CFG
+	sed -i "/\[mysqld\]/a relay_log_info_repository=TABLE" $CFG
+	sed -i "/\[mysqld\]/a transaction_write_set_extraction=XXHASH64" $CFG
+	sed -i "/\[mysqld\]/a group_replication_group_name=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" $CFG
+	sed -i "/\[mysqld\]/a group_replication_start_on_boot=OFF" $CFG
+	sed -i "/\[mysqld\]/a group_replication_local_address=${FQDN}:33061" $CFG
+	sed -i "/\[mysqld\]/a group_replication_bootstrap_group=OFF" $CFG
+	sed -i "/\[mysqld\]/a group_replication_ip_allowlist='0.0.0.0/0'" $CFG
+	sed -i "/\[mysqld\]/a group_replication_recovery_get_public_key=ON" $CFG
+	sed -i "/\[mysqld\]/a group_replication_single_primary_mode=ON" $CFG
+
 }
 
 MYSQL_VERSION=$(mysqld -V | awk '{print $3}' | awk -F'.' '{print $1"."$2}')
@@ -361,6 +380,8 @@ if [ "$1" = 'mysqld' -a -z "$wantHelp" ]; then
 		echo 'MySQL init process done. Ready for start up.'
 		echo
 	fi
+
+	add_group_replication_variables
 
 	# exit when MYSQL_INIT_ONLY environment variable is set to avoid starting mysqld
 	if [ ! -z "$MYSQL_INIT_ONLY" ]; then

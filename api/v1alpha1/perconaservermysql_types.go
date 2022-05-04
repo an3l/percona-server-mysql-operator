@@ -48,7 +48,7 @@ type PerconaServerMySQLSpec struct {
 type ClusterType string
 
 const (
-	ClusterTypeGr    ClusterType = "gr"
+	ClusterTypeGR    ClusterType = "group-replication"
 	ClusterTypeAsync ClusterType = "async"
 )
 
@@ -323,7 +323,7 @@ func (cr *PerconaServerMySQL) CheckNSetDefaults(serverVersion *platform.ServerVe
 	cr.Spec.MySQL.reconcileAffinityOpts()
 	cr.Spec.Orchestrator.reconcileAffinityOpts()
 
-	if oSize := int(cr.Spec.Orchestrator.Size); (oSize < 3 || oSize%2 == 0) && !cr.Spec.AllowUnsafeConfig {
+	if oSize := int(cr.Spec.Orchestrator.Size); (oSize < 3 || oSize%2 == 0) && oSize != 0 && !cr.Spec.AllowUnsafeConfig {
 		return errors.New("Orchestrator size must be 3 or greater and an odd number for raft setup")
 	}
 
