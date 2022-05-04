@@ -47,7 +47,7 @@ type Replicator interface {
 	SetSemiSyncSize(size int) error
 	SetGlobal(variable, value string) error
 	StartGroupReplication(password string) error
-        GetMemberState(host string) (MemberState, error)
+	GetMemberState(host string) (MemberState, error)
 }
 
 type dbImpl struct{ db *sql.DB }
@@ -223,12 +223,12 @@ func (d *dbImpl) SetSemiSyncSize(size int) error {
 }
 
 func (d *dbImpl) SetGlobal(variable, value string) error {
-	_, err := d.db.Exec("SET GLOBAL ?=?", variable, value)
+	_, err := d.db.Exec(fmt.Sprintf("SET GLOBAL %s=?", variable), value)
 	return errors.Wrapf(err, "SET GLOBAL %s=%s", variable, value)
 }
 
 func (d *dbImpl) StartGroupReplication(password string) error {
-	_, err := d.db.Exec("START GROUP_REPLICATION USER=? PASSWORD=?", apiv1alpha1.UserReplication, password)
+	_, err := d.db.Exec("START GROUP_REPLICATION USER=?, PASSWORD=?", apiv1alpha1.UserReplication, password)
 	return errors.Wrap(err, "start group replication")
 }
 
@@ -237,6 +237,9 @@ func (d *dbImpl) GetMemberState(host string) (MemberState, error) {
 
 	err := d.db.QueryRow("SELECT MEMBER_STATE FROM replication_group_members WHERE MEMBER_HOST=?", host).Scan(&state)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return MemberStateOffline, nil
+		}
 		return MemberStateError, errors.Wrap(err, "query member state")
 	}
 

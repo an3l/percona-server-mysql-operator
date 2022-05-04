@@ -749,13 +749,17 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 		l.Info("waiting first pod to be ready")
 	}
 
-	db, err := replicator.NewReplicator(apiv1alpha1.UserOperator, operatorPass, firstPod.Name, mysql.DefaultAdminPort)
+	db, err := replicator.NewReplicator(apiv1alpha1.UserOperator, operatorPass, mysql.FQDN(cr, 0), mysql.DefaultAdminPort)
 	if err != nil {
 		return errors.Wrapf(err, "connect to %s", firstPod.Name)
 	}
 	defer db.Close()
 
 	state, err := db.GetMemberState(mysql.PodName(cr, 0) + "." + mysql.ServiceName(cr) + "." + cr.Namespace)
+	if err != nil {
+		return errors.Wrapf(err, "get member state from %s", firstPod.Name)
+	}
+
 	if state == replicator.MemberStateOffline {
 		if err := db.SetGlobal("group_replication_bootstrap_group", "ON"); err != nil {
 			return err
@@ -786,19 +790,23 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 			continue
 		}
 
-		db, err := replicator.NewReplicator(apiv1alpha1.UserOperator, operatorPass, pod.Name, mysql.DefaultAdminPort)
+		db, err := replicator.NewReplicator(apiv1alpha1.UserOperator, operatorPass, mysql.FQDN(cr, i), mysql.DefaultAdminPort)
 		if err != nil {
 			return errors.Wrapf(err, "connect to %s", pod.Name)
 		}
 		defer db.Close()
 
 		state, err := db.GetMemberState(mysql.PodName(cr, i) + "." + mysql.ServiceName(cr) + "." + cr.Namespace)
+		if err != nil {
+			return errors.Wrapf(err, "get member state from %s", pod.Name)
+		}
+
 		if state != replicator.MemberStateOffline {
 			l.Info("Member state", "pod", pod.Name, "state", state)
 			continue
 		}
 
-		seeds := make([]string, i)
+		seeds := make([]string, i+1)
 		for j := 0; j <= i; j++ {
 			seeds[j] = fmt.Sprintf("%s:%d", mysql.FQDN(cr, j), mysql.DefaultGRPort)
 		}
