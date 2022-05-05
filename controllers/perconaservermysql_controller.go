@@ -725,18 +725,8 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 		return nil
 	}
 
-	operatorPass, err := k8s.UserPassword(ctx, r.Client, cr, apiv1alpha1.UserOperator)
-	if err != nil {
-		return errors.Wrap(err, "get operator password")
-	}
-
-	replicationPass, err := k8s.UserPassword(ctx, r.Client, cr, apiv1alpha1.UserReplication)
-	if err != nil {
-		return errors.Wrap(err, "get replication password")
-	}
-
 	firstPod := &corev1.Pod{}
-	err = r.Client.Get(ctx, types.NamespacedName{Namespace: cr.Namespace, Name: mysql.Name(cr) + "-0"}, firstPod)
+	err := r.Client.Get(ctx, types.NamespacedName{Namespace: cr.Namespace, Name: mysql.Name(cr) + "-0"}, firstPod)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			return nil
@@ -747,6 +737,17 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 
 	if !k8s.IsPodReady(*firstPod) {
 		l.Info("waiting first pod to be ready")
+		return nil
+	}
+
+	operatorPass, err := k8s.UserPassword(ctx, r.Client, cr, apiv1alpha1.UserOperator)
+	if err != nil {
+		return errors.Wrap(err, "get operator password")
+	}
+
+	replicationPass, err := k8s.UserPassword(ctx, r.Client, cr, apiv1alpha1.UserReplication)
+	if err != nil {
+		return errors.Wrap(err, "get replication password")
 	}
 
 	db, err := replicator.NewReplicator(apiv1alpha1.UserOperator, operatorPass, mysql.FQDN(cr, 0), mysql.DefaultAdminPort)
@@ -754,6 +755,14 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 		return errors.Wrapf(err, "connect to %s", firstPod.Name)
 	}
 	defer db.Close()
+
+	asyncReplicationStatus, _, err := db.ReplicationStatus()
+	if asyncReplicationStatus == replicator.ReplicationStatusActive {
+		l.Info("Replication threads are running. Stopping them before starting group replication", "pod", firstPod.Name)
+		if err := db.StopReplication(); err != nil {
+			return err
+		}
+	}
 
 	state, err := db.GetMemberState(mysql.PodName(cr, 0) + "." + mysql.ServiceName(cr) + "." + cr.Namespace)
 	if err != nil {
@@ -779,13 +788,22 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 		}
 	}
 
+	l.Info("Member state", "pod", firstPod.Name, "state", state)
+	if state != replicator.MemberStateOnline {
+		l.Info("Waiting member to be ONLINE", "pod", firstPod.Name)
+		return nil
+	}
+
 	pods, err := k8s.PodsByLabels(ctx, r.Client, mysql.MatchLabels(cr))
 	if err != nil {
 		return errors.Wrap(err, "get MySQL pods")
 	}
 
 	for i, pod := range pods {
-		if i == 0 || !k8s.IsPodReady(pod) {
+		if pod.Name == firstPod.Name {
+			continue
+		}
+		if !k8s.IsPodReady(pod) {
 			l.Info("skipping pod since it's not ready", "pod", pod.Name)
 			continue
 		}
@@ -795,6 +813,14 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 			return errors.Wrapf(err, "connect to %s", pod.Name)
 		}
 		defer db.Close()
+
+		asyncReplicationStatus, _, err := db.ReplicationStatus()
+		if asyncReplicationStatus == replicator.ReplicationStatusActive {
+			l.Info("Replication threads are running. Stopping them before starting group replication", "pod", pod.Name)
+			if err := db.StopReplication(); err != nil {
+				return err
+			}
+		}
 
 		state, err := db.GetMemberState(mysql.PodName(cr, i) + "." + mysql.ServiceName(cr) + "." + cr.Namespace)
 		if err != nil {
