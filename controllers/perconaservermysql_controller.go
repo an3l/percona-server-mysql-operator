@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	k8sretry "k8s.io/client-go/util/retry"
+	k8sexec "k8s.io/utils/exec"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -43,6 +44,7 @@ import (
 	apiv1alpha1 "github.com/percona/percona-server-mysql-operator/api/v1alpha1"
 	"github.com/percona/percona-server-mysql-operator/pkg/k8s"
 	"github.com/percona/percona-server-mysql-operator/pkg/mysql"
+	"github.com/percona/percona-server-mysql-operator/pkg/mysqlsh"
 	"github.com/percona/percona-server-mysql-operator/pkg/orchestrator"
 	"github.com/percona/percona-server-mysql-operator/pkg/platform"
 	"github.com/percona/percona-server-mysql-operator/pkg/replicator"
@@ -764,12 +766,19 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 		}
 	}
 
-	state, err := db.GetMemberState(mysql.PodName(cr, 0) + "." + mysql.ServiceName(cr) + "." + cr.Namespace)
+	firstPodUri := mysql.PodName(cr, 0) + "." + mysql.ServiceName(cr) + "." + cr.Namespace
+	state, err := db.GetMemberState(firstPodUri)
 	if err != nil {
 		return errors.Wrapf(err, "get member state from %s", firstPod.Name)
 	}
 
+	mysh := mysqlsh.New(k8sexec.New(), firstPodUri)
+
 	if state == replicator.MemberStateOffline {
+		if err := mysh.ConfigureInstance(ctx); err != nil {
+			return err
+		}
+
 		if err := db.SetGlobal("group_replication_bootstrap_group", "ON"); err != nil {
 			return err
 		}
@@ -832,6 +841,11 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 			continue
 		}
 
+		msh := mysqlsh.New(k8sexec.New(), mysql.FQDN(cr, i))
+		if err := msh.ConfigureInstance(ctx); err != nil {
+			return err
+		}
+
 		seeds := make([]string, i+1)
 		for j := 0; j <= i; j++ {
 			seeds[j] = fmt.Sprintf("%s:%d", mysql.FQDN(cr, j), mysql.DefaultGRPort)
@@ -842,6 +856,12 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 		}
 
 		if err := db.StartGroupReplication(replicationPass); err != nil {
+			return err
+		}
+	}
+
+	if !mysh.DoesClusterExists(ctx, cr.Name) {
+		if err := mysh.CreateCluster(ctx, cr.Name); err != nil {
 			return err
 		}
 	}
