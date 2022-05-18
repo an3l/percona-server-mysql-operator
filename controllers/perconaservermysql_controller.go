@@ -772,7 +772,7 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 		return errors.Wrapf(err, "get member state from %s", firstPod.Name)
 	}
 
-	mysh := mysqlsh.New(k8sexec.New(), firstPodUri)
+	mysh := mysqlsh.New(k8sexec.New(), fmt.Sprintf("%s:%s@%s", apiv1alpha1.UserOperator, operatorPass, firstPodUri))
 
 	if state == replicator.MemberStateOffline {
 		if err := mysh.ConfigureInstance(ctx); err != nil {
@@ -841,7 +841,7 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 			continue
 		}
 
-		msh := mysqlsh.New(k8sexec.New(), mysql.FQDN(cr, i))
+		msh := mysqlsh.New(k8sexec.New(), fmt.Sprintf("%s:%s@%s", apiv1alpha1.UserOperator, operatorPass, mysql.FQDN(cr, i)))
 		if err := msh.ConfigureInstance(ctx); err != nil {
 			return err
 		}

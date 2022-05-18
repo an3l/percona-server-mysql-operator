@@ -1,7 +1,6 @@
 package mysqlsh
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 
@@ -19,24 +18,19 @@ func New(e k8sexec.Interface, uri string) *mysqlsh {
 }
 
 func (m *mysqlsh) run(ctx context.Context, cmd string) error {
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-
 	args := []string{"--uri", m.uri, "-e", cmd}
 
 	c := m.exec.CommandContext(ctx, "mysqlsh", args...)
-	c.SetStdout(stdout)
-	c.SetStderr(stderr)
 
 	if err := c.Run(); err != nil {
-		return errors.Wrapf(err, "run %s", cmd)
+		return errors.Wrapf(err, "run %s")
 	}
 
 	return nil
 }
 
 func (m *mysqlsh) ConfigureInstance(ctx context.Context) error {
-	cmd := "dba.configureInstance()"
+	cmd := fmt.Sprintf("dba.configureInstance('%s', {'interactive': false})", m.uri)
 
 	if err := m.run(ctx, cmd); err != nil {
 		return errors.Wrap(err, "configure instance")

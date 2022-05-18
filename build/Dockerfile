@@ -45,9 +45,11 @@ RUN export GNUPGHOME="$(mktemp -d)" \
 
 RUN set -ex; \
     microdnf update; \
-    microdnf install -y  percona-mysql-shell; \
+    microdnf install -y percona-mysql-shell; \
     microdnf clean all; \
     rm -rf /var/cache
+
+RUN mkdir /sbin/.mysqlsh && chown 2:2 /sbin/.mysqlsh
 
 LABEL name="Percona Distribution for MySQL Operator" \
       vendor="Percona" \
