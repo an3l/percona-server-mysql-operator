@@ -3,13 +3,12 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
-
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"path/filepath"
 
 	apiv1alpha1 "github.com/percona/percona-server-mysql-operator/api/v1alpha1"
 	"github.com/percona/percona-server-mysql-operator/pkg/mysql"
@@ -375,6 +374,7 @@ func RaftNodes(cr *apiv1alpha1.PerconaServerMySQL) []string {
 func orcConfig(cr *apiv1alpha1.PerconaServerMySQL) (string, error) {
 	config := make(map[string]interface{}, 0)
 
+	config["UseSuperReadOnly"] = true
 	config["RaftNodes"] = RaftNodes(cr)
 	configJson, err := json.Marshal(config)
 	if err != nil {

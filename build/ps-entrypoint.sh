@@ -156,6 +156,7 @@ create_default_cnf() {
 	sed -i "/\[mysqld\]/a plugin-load-add=clone=mysql_clone.so" $CFG
 	sed -i "/\[mysqld\]/a plugin-load-add=rpl_semi_sync_master=semisync_master.so" $CFG
 	sed -i "/\[mysqld\]/a plugin-load-add=rpl_semi_sync_slave=semisync_slave.so" $CFG
+	sed -i "/\[mysqld\]/a super_read_only=ON" $CFG
 
 	if [[ -d ${TLS_DIR} ]]; then
 		sed -i "/\[mysqld\]/a ssl_ca=${TLS_DIR}/ca.crt" $CFG
