@@ -5,6 +5,10 @@ metadata:
 spec:
   secretsName: cluster1-secrets
   sslSecretName: cluster1-ssl
+  router:
+    image: perconalab/percona-server-mysql-operator:router
+    imagePullPolicy: Always
+    size: 3
   mysql:
     clusterType: group-replication
     image: percona/percona-server:8.0.25

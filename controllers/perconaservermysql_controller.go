@@ -48,6 +48,7 @@ import (
 	"github.com/percona/percona-server-mysql-operator/pkg/orchestrator"
 	"github.com/percona/percona-server-mysql-operator/pkg/platform"
 	"github.com/percona/percona-server-mysql-operator/pkg/replicator"
+	"github.com/percona/percona-server-mysql-operator/pkg/router"
 	"github.com/percona/percona-server-mysql-operator/pkg/secret"
 	"github.com/percona/percona-server-mysql-operator/pkg/users"
 	"github.com/percona/percona-server-mysql-operator/pkg/util"
@@ -62,7 +63,7 @@ type PerconaServerMySQLReconciler struct {
 
 //+kubebuilder:rbac:groups=ps.percona.com,resources=perconaservermysqls;perconaservermysqls/status;perconaservermysqls/finalizers,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups="",resources=pods;configmaps;services;secrets,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=apps,resources=statefulsets;deployments,verbs=get;list;watch;create;update;patch;delete
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PerconaServerMySQLReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -134,6 +135,9 @@ func (r *PerconaServerMySQLReconciler) doReconcile(
 	}
 	if err := r.reconcileReplication(ctx, cr); err != nil {
 		return errors.Wrap(err, "replication")
+	}
+	if err := r.reconcileMySQLRouter(ctx, cr); err != nil {
+		return errors.Wrap(err, "MySQL router")
 	}
 	if err := r.cleanupOutdated(ctx, cr); err != nil {
 		return errors.Wrap(err, "cleanup outdated")
@@ -517,8 +521,10 @@ func (r *PerconaServerMySQLReconciler) reconcileServicePerPod(ctx context.Contex
 func (r *PerconaServerMySQLReconciler) reconcileMySQLServices(ctx context.Context, cr *apiv1alpha1.PerconaServerMySQL) error {
 	_ = log.FromContext(ctx).WithName("reconcileMySQLServices")
 
-	if err := k8s.EnsureObjectWithHash(ctx, r.Client, cr, mysql.PrimaryService(cr), r.Scheme); err != nil {
-		return errors.Wrap(err, "reconcile primary svc")
+	if cr.Spec.MySQL.ClusterType != apiv1alpha1.ClusterTypeGR {
+		if err := k8s.EnsureObjectWithHash(ctx, r.Client, cr, mysql.PrimaryService(cr), r.Scheme); err != nil {
+			return errors.Wrap(err, "reconcile primary svc")
+		}
 	}
 
 	if err := k8s.EnsureObjectWithHash(ctx, r.Client, cr, mysql.UnreadyService(cr), r.Scheme); err != nil {
@@ -686,8 +692,16 @@ func (r *PerconaServerMySQLReconciler) reconcileServices(ctx context.Context, cr
 		return errors.Wrap(err, "reconcile MySQL services")
 	}
 
-	if err := r.reconcileOrchestratorServices(ctx, cr); err != nil {
-		return errors.Wrap(err, "reconcile Orchestrator services")
+	if cr.Spec.MySQL.ClusterType != apiv1alpha1.ClusterTypeGR {
+		if err := r.reconcileOrchestratorServices(ctx, cr); err != nil {
+			return errors.Wrap(err, "reconcile Orchestrator services")
+		}
+	}
+
+	if cr.Spec.MySQL.ClusterType == apiv1alpha1.ClusterTypeGR {
+		if err := k8s.EnsureObjectWithHash(ctx, r.Client, cr, router.Service(cr), r.Scheme); err != nil {
+			return errors.Wrap(err, "reconcile router svc")
+		}
 	}
 
 	return nil
@@ -698,6 +712,10 @@ func (r *PerconaServerMySQLReconciler) reconcileReplication(ctx context.Context,
 
 	if err := r.reconcileGroupReplication(ctx, cr); err != nil {
 		return errors.Wrap(err, "reconcile group replication")
+	}
+
+	if cr.Spec.MySQL.ClusterType == apiv1alpha1.ClusterTypeGR {
+		return nil
 	}
 
 	sts := &appsv1.StatefulSet{}
@@ -808,6 +826,7 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 		return errors.Wrap(err, "get MySQL pods")
 	}
 
+	onlineInstances := 1
 	for i, pod := range pods {
 		if pod.Name == firstPod.Name {
 			continue
@@ -837,11 +856,17 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 		}
 
 		if state != replicator.MemberStateOffline {
+			if state == replicator.MemberStateOnline {
+				onlineInstances++
+			}
+
 			l.Info("Member state", "pod", pod.Name, "state", state)
 			continue
 		}
 
-		msh := mysqlsh.New(k8sexec.New(), fmt.Sprintf("%s:%s@%s", apiv1alpha1.UserOperator, operatorPass, mysql.FQDN(cr, i)))
+		podFQDN := mysql.FQDN(cr, i)
+		msh := mysqlsh.New(k8sexec.New(), fmt.Sprintf("%s:%s@%s", apiv1alpha1.UserOperator, operatorPass, podFQDN))
+		l.Info("Configuring instance", "pod", pod.Name)
 		if err := msh.ConfigureInstance(ctx); err != nil {
 			return err
 		}
@@ -855,13 +880,19 @@ func (r *PerconaServerMySQLReconciler) reconcileGroupReplication(ctx context.Con
 			return err
 		}
 
+		l.Info("Starting group replication", "pod", pod.Name)
 		if err := db.StartGroupReplication(replicationPass); err != nil {
 			return err
 		}
 	}
 
-	if !mysh.DoesClusterExists(ctx, cr.Name) {
+	if onlineInstances == int(cr.Spec.MySQL.Size) && !mysh.DoesClusterExists(ctx, cr.Name) {
+		l.Info("Creating InnoDB Cluster", "cluster", cr.Name)
 		if err := mysh.CreateCluster(ctx, cr.Name); err != nil {
+			return err
+		}
+
+		if err := mysh.ClusterRescan(ctx, cr.Name); err != nil {
 			return err
 		}
 	}
@@ -1006,6 +1037,32 @@ func (r *PerconaServerMySQLReconciler) cleanupOutdatedServices(ctx context.Conte
 		if err := r.Client.Delete(ctx, &svc); err != nil && !k8serrors.IsNotFound(err) {
 			return errors.Wrapf(err, "delete Service/%s", svc.Name)
 		}
+	}
+
+	return nil
+}
+
+func (r *PerconaServerMySQLReconciler) reconcileMySQLRouter(ctx context.Context, cr *apiv1alpha1.PerconaServerMySQL) error {
+	l := log.FromContext(ctx).WithName("reconcileMySQLRouter")
+
+	if cr.Spec.MySQL.ClusterType != apiv1alpha1.ClusterTypeGR {
+		return nil
+	}
+
+	operatorPass, err := k8s.UserPassword(ctx, r.Client, cr, apiv1alpha1.UserOperator)
+	if err != nil {
+		return errors.Wrap(err, "get operator password")
+	}
+
+	firstPodUri := mysql.PodName(cr, 0) + "." + mysql.ServiceName(cr) + "." + cr.Namespace
+	mysh := mysqlsh.New(k8sexec.New(), fmt.Sprintf("%s:%s@%s", apiv1alpha1.UserOperator, operatorPass, firstPodUri))
+	if !mysh.DoesClusterExists(ctx, cr.Name) {
+		l.Info("Waiting for InnoDB Cluster", "cluster", cr.Name)
+		return nil
+	}
+
+	if err := k8s.EnsureObjectWithHash(ctx, r.Client, cr, router.Deployment(cr), r.Scheme); err != nil {
+		return errors.Wrap(err, "reconcile Deployment")
 	}
 
 	return nil
