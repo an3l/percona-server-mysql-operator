@@ -42,29 +42,110 @@ Contributions to the source tree should follow the workflow described below:
    ```
 3. Build the image and test your changes.
 
-   Building and pushing the image to your own repository:
+   Before starting make sure you have your account created on [docker.io](https://www.docker.com/)and that you have logged-in from your terminal [docker login](https://docs.docker.com/engine/reference/commandline/login/).
+   First we are going to create the custom image with `make` utility (default one is [perconalab/percona-server-mysql-operator:<name-of-current-branch>](https://hub.docker.com/r/perconalab/percona-server-mysql-operator/).
+   Our build script (`e2e-tests/build`) disables caching and uses the experimental squash feature of Docker. To disable this behaviour and build the image use the following command:
 
    ```
-   make IMAGE=egegunes/percona-server-mysql-operator:k8sps-22
+   DOCKER_PUSH=0 DOCKER_SQUASH=0 DOCKER_NOCACHE=0 make IMAGE=<your-docker-id>/<custom-repository-name>:<custom-tag>
    ```
 
-   `Makefile` can automatically detect the image tag using the current branch. You can just override the image with:
+   Let's use `percona-server-mysql-operator` as an `custom-repository-name` and follow the previous example:
 
    ```
-   make IMAGE_TAG_BASE=egegunes/percona-server-mysql-operator
+   DOCKER_PUSH=0 DOCKER_SQUASH=0 DOCKER_NOCACHE=0 make IMAGE=egegunes/percona-server-mysql-operator:k8sps-22
    ```
 
-   Our build script (`e2e-tests/build`) disables caching and uses the experimental squash feature of Docker. To disable this behaviours:
+   After the image is built push it to your docker hub.
 
    ```
-   DOCKER_SQUASH=0 DOCKER_NOCACHE=0 make IMAGE=egegunes/percona-server-mysql-operator:k8sps-22
+   docker push <your-docker-id>/<custom-repository-name>:<custom-tag>
    ```
 
-   Once your image is built and ready, install CRDs and deploy operator to your cluster:
+   Reason for pushing to remote registry is that after installing the custom resource and generating the pod for the operator, image will be pulled from your remote repository.
+
+   `Makefile` can automatically detect the image tag using the current branch. You can just override the image s with:
 
    ```
-   make install deploy IMAGE=egegunes/percona-server-mysql-operator:k8sps-22
+   DOCKER_PUSH=0 DOCKER_SQUASH=0 DOCKER_NOCACHE=0 make IMAGE_TAG_BASE=<your-docker-id>/percona-server-mysql-operator
    ```
+
+   Once your image is built and ready, make sure your `minikube` is started, install custom resource definitions (CRDs() and deploy operator to your cluster:
+
+   ```
+   minikube start
+   make install deploy IMAGE=<your-docker-id>/percona-server-mysql-operator:k8sps-22
+   ```
+
+   The output of ` kubectl get all` should be like this
+
+   ```
+   NAME                                                 READY   STATUS    RESTARTS   AGE
+   pod/percona-server-mysql-operator-7cd85cfb7b-xxbsm   1/1     Running   0          49s
+
+   NAME                 TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE
+   service/kubernetes   ClusterIP   10.96.0.1    <none>        443/TCP   25d
+
+   NAME                                            READY   UP-TO-DATE   AVAILABLE   AGE
+   deployment.apps/percona-server-mysql-operator   1/1     1            1           49s
+
+   NAME                                                       DESIRED   CURRENT   READY   AGE
+   replicaset.apps/percona-server-mysql-operator-7cd85cfb7b   1         1         1       49s
+   ```
+
+   The created custom resources `kubectl get crds | grep percona` should be:
+   ```
+   perconaservermysqlbackups.ps.percona.com    2022-06-27T15:14:49Z
+   perconaservermysqlrestores.ps.percona.com   2022-06-27T15:14:49Z
+   perconaservermysqls.ps.percona.com          2022-06-27T15:14:49Z
+   ```
+
+   Now you need to create a custom resource from CRD.
+   Here we will show for percona cluster with default asynchronous replication:
+
+   ```
+   kubectl apply -f deploy/cr.yaml 
+   perconaservermysql.ps.percona.com/cluster1 created
+   ```
+
+   By creating the custom resource we get the following output in the cluster by running `kubectl get ps`:
+   ```
+   NAME       REPLICATION   ENDPOINT                         STATE          AGE
+   cluster1   async         cluster1-mysql-primary.default   initializing   21s
+
+   # WIP TODO -  THIS IS WHERE IS A BUG(?) IN STARTUP PROBE CONTAINER DOESN'T START
+   kubectl get all
+   NAME                                                 READY   STATUS            RESTARTS   AGE
+   pod/cluster1-mysql-0                                 0/2     PodInitializing   0          44s
+   pod/cluster1-orc-0                                   1/2     Running           0          44s
+   pod/percona-server-mysql-operator-7cd85cfb7b-xxbsm   1/1     Running           0          6m35s
+
+   NAME                             TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                                 AGE
+   service/cluster1-mysql           ClusterIP   None            <none>        3306/TCP,33062/TCP,33060/TCP,6033/TCP   44s
+   service/cluster1-mysql-primary   ClusterIP   10.104.71.142   <none>        3306/TCP,33062/TCP,33060/TCP,6033/TCP   45s
+   service/cluster1-mysql-unready   ClusterIP   None            <none>        3306/TCP,33062/TCP,33060/TCP,6033/TCP   44s
+   service/cluster1-orc             ClusterIP   None            <none>        3000/TCP,10008/TCP                      44s
+   service/cluster1-orc-0           ClusterIP   10.97.184.136   <none>        3000/TCP,10008/TCP                      44s
+   service/cluster1-orc-1           ClusterIP   10.107.58.57    <none>        3000/TCP,10008/TCP                      44s
+   service/cluster1-orc-2           ClusterIP   10.106.229.45   <none>        3000/TCP,10008/TCP                      44s
+   service/kubernetes               ClusterIP   10.96.0.1       <none>        443/TCP                                 25d
+
+   NAME                                            READY   UP-TO-DATE   AVAILABLE   AGE
+   deployment.apps/percona-server-mysql-operator   1/1     1            1           6m35s
+
+   NAME                                                       DESIRED   CURRENT   READY   AGE
+   replicaset.apps/percona-server-mysql-operator-7cd85cfb7b   1         1         1       6m35s
+
+   NAME                              READY   AGE
+   statefulset.apps/cluster1-mysql   0/3     44s
+   statefulset.apps/cluster1-orc     0/3     44s
+   ```
+
+   To clean the custom resource definitions as well as custom reosource objects run
+   ```
+   kubectl delete -f ./deploy/bundle.yaml
+   ```
+
 4. Create a pull request to the main repository on GitHub.
 5. When the reviewer makes some comments, address any feedback that comes and update the pull request.
 6. When your contribution is accepted, your pull request will be approved and merged to the main branch.
