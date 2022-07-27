@@ -9,7 +9,7 @@ spec:
   sslSecretName: cluster1-ssl
   mysql:
     clusterType: async
-    image: percona/percona-server:8.0.28
+    image: anelh/percona-server-mysql-operator:anel-try-to-build-again
     imagePullPolicy: Always
 
     size: 3
@@ -24,7 +24,7 @@ spec:
         memory: 2G
 
     affinity:
-      antiAffinityTopologyKey: "kubernetes.io/hostname"
+      antiAffinityTopologyKey: "none"
 #      advanced:
 #        nodeAffinity:
 #          requiredDuringSchedulingIgnoredDuringExecution:
@@ -89,7 +89,7 @@ spec:
         memory: 256M
 
     affinity:
-      antiAffinityTopologyKey: "kubernetes.io/hostname"
+      antiAffinityTopologyKey: "none"
 #      advanced:
 #        nodeAffinity:
 #          requiredDuringSchedulingIgnoredDuringExecution:
@@ -111,7 +111,7 @@ spec:
     size: 3
 
     affinity:
-      antiAffinityTopologyKey: "kubernetes.io/hostname"
+      antiAffinityTopologyKey: "none"
 #      advanced:
 #        nodeAffinity:
 #          requiredDuringSchedulingIgnoredDuringExecution:

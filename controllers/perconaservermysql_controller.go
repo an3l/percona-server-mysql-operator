@@ -22,10 +22,11 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"reflect"
 	"strconv"
 	"time"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
@@ -610,6 +611,11 @@ func (r *PerconaServerMySQLReconciler) reconcileOrchestrator(ctx context.Context
 		return nil
 	}
 
+	if cr.OrchestratorSpec().Size == 0 {
+		l.Info("Orchestrator not specified. You have to specify orchestrator in CR.")
+		return nil
+	}
+
 	cm := &corev1.ConfigMap{}
 	err := r.Client.Get(ctx, orchestrator.NamespacedName(cr), cm)
 	if client.IgnoreNotFound(err) != nil {
@@ -1109,6 +1115,10 @@ func (r *PerconaServerMySQLReconciler) reconcileMySQLRouter(ctx context.Context,
 		return nil
 	}
 
+	if cr.MySQLRouterSpec().Size == 0 {
+		l.Info("Router not specified. You have to specify router in CR.")
+		return nil
+	}
 	operatorPass, err := k8s.UserPassword(ctx, r.Client, cr, apiv1alpha1.UserOperator)
 	if err != nil {
 		return errors.Wrap(err, "get operator password")
@@ -1181,14 +1191,17 @@ func (r *PerconaServerMySQLReconciler) reconcileCRStatus(ctx context.Context, cr
 	}
 	cr.Status.MySQL = mysqlStatus
 
-	orcStatus := apiv1alpha1.StatefulAppStatus{}
-	if cr.Spec.MySQL.IsAsync() {
-		orcStatus, err = appStatus(ctx, r.Client, cr.OrchestratorSpec().Size, orchestrator.MatchLabels(cr))
-		if err != nil {
-			return errors.Wrap(err, "get Orchestrator status")
+	if cr.OrchestratorSpec().Size != 0 {
+		orcStatus := apiv1alpha1.StatefulAppStatus{}
+		orcStatus.State = apiv1alpha1.StateInitializing
+		if cr.Spec.MySQL.IsAsync() {
+			orcStatus, err = appStatus(ctx, r.Client, cr.OrchestratorSpec().Size, orchestrator.MatchLabels(cr))
+			if err != nil {
+				return errors.Wrap(err, "get Orchestrator status")
+			}
 		}
+		cr.Status.Orchestrator = orcStatus
 	}
-	cr.Status.Orchestrator = orcStatus
 
 	routerStatus := apiv1alpha1.StatefulAppStatus{}
 	if cr.Spec.MySQL.IsGR() {
@@ -1279,7 +1292,7 @@ func appStatus(
 		}
 	}
 
-	if status.Ready == status.Size {
+	if status.Ready == status.Size && status.Size != 0 {
 		status.State = apiv1alpha1.StateReady
 	}
 

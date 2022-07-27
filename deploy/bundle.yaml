@@ -11503,7 +11503,7 @@ spec:
             fieldRef:
               apiVersion: v1
               fieldPath: metadata.namespace
-        image: perconalab/percona-server-mysql-operator:main
+        image: anelh/percona-server-mysql-operator:anel-try-to-build-again
         imagePullPolicy: Always
         livenessProbe:
           httpGet:

@@ -47,57 +47,57 @@ Contributions to the source tree should follow the workflow described below:
    Our build script (`e2e-tests/build`) disables caching and uses the experimental squash feature of Docker. To disable this behaviour and build the image use the following command:
 
    ```
-   DOCKER_PUSH=0 DOCKER_SQUASH=0 DOCKER_NOCACHE=0 make IMAGE=<your-docker-id>/<custom-repository-name>:<custom-tag>
+   DOCKER_SQUASH=0 DOCKER_NOCACHE=0 make IMAGE=<your-docker-id>/<custom-repository-name>:<custom-tag>
    ```
 
    Let's use `percona-server-mysql-operator` as an `custom-repository-name` and follow the previous example:
 
    ```
-   DOCKER_PUSH=0 DOCKER_SQUASH=0 DOCKER_NOCACHE=0 make IMAGE=egegunes/percona-server-mysql-operator:k8sps-22
+   DOCKER_SQUASH=0 DOCKER_NOCACHE=0 make IMAGE=egegunes/percona-server-mysql-operator:k8sps-22
    ```
 
-   After the image is built push it to your docker hub.
+   The process will build and push the image to your docker hub.
+   Reason for pushing to remote registry is that after installing the custom resource and generating the pod for the operator, image will be pulled from your remote repository.
+   In case you want to only to build the image use environment variable `DOCKER_PUSH=0`
+   and after image is built, push image manually:
 
    ```
    docker push <your-docker-id>/<custom-repository-name>:<custom-tag>
    ```
 
-   Reason for pushing to remote registry is that after installing the custom resource and generating the pod for the operator, image will be pulled from your remote repository.
-
-   `Makefile` can automatically detect the image tag using the current branch. You can just override the image s with:
+   `Makefile` can automatically detect the image tag using the current branch. You can just override the image with:
 
    ```
-   DOCKER_PUSH=0 DOCKER_SQUASH=0 DOCKER_NOCACHE=0 make IMAGE_TAG_BASE=<your-docker-id>/percona-server-mysql-operator
+   DOCKER_SQUASH=0 DOCKER_NOCACHE=0 make IMAGE_TAG_BASE=<your-docker-id>/percona-server-mysql-operator
    ```
 
-   Once your image is built and ready, make sure your `minikube` is started, install custom resource definitions (CRDs() and deploy operator to your cluster:
+   Once your image is built and ready, install custom resource definitions (CRDs) and deploy operator to your cluster:
 
    ```
-   minikube start
    make install deploy IMAGE=<your-docker-id>/percona-server-mysql-operator:k8sps-22
    ```
 
-   The output of ` kubectl get all` should be like this
+   You should expect that deployment for operator, CRDs, secret and cm will be created :
 
    ```
+   kubectl get all
    NAME                                                 READY   STATUS    RESTARTS   AGE
    pod/percona-server-mysql-operator-7cd85cfb7b-xxbsm   1/1     Running   0          49s
-
-   NAME                 TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE
-   service/kubernetes   ClusterIP   10.96.0.1    <none>        443/TCP   25d
 
    NAME                                            READY   UP-TO-DATE   AVAILABLE   AGE
    deployment.apps/percona-server-mysql-operator   1/1     1            1           49s
 
    NAME                                                       DESIRED   CURRENT   READY   AGE
    replicaset.apps/percona-server-mysql-operator-7cd85cfb7b   1         1         1       49s
-   ```
 
-   The created custom resources `kubectl get crds | grep percona` should be:
-   ```
+   kubectl get crds
    perconaservermysqlbackups.ps.percona.com    2022-06-27T15:14:49Z
    perconaservermysqlrestores.ps.percona.com   2022-06-27T15:14:49Z
    perconaservermysqls.ps.percona.com          2022-06-27T15:14:49Z
+   ```
+   To verify your operator works correctly, you can check the logs from operator
+   ```
+   kubectl logs percona-server-mysql-operator 
    ```
 
    Now you need to create a custom resource from CRD.
